@@ -96,6 +96,32 @@ try {
   await sleep(2000); // 等前端批量上报
   await page.screenshot({ path: path.join(OUT, '03-saved.png') });
 
+  // ★ 同页两栏：左业务 / 右实时观测（本轮新增的核心交付）
+  console.log('\n[3.5/5] 同页两栏视图');
+  await sleep(1500);
+  const streamRows = await page.$$eval('.stream-list .ev', (rs) => rs.length).catch(() => 0);
+  const hasPanel = (await page.$('.live[data-observe-ignore]')) !== null;
+  check('同页存在观测面板', hasPanel);
+  check('左栏实时事件流有记录', streamRows > 0, `${streamRows} 条`);
+  const sid = await page.evaluate(() => sessionStorage.getItem('observe.sessionId'));
+  const evCount = async () => {
+    const g = await (await fetch(`${API}/observe/graph?sessionId=${sid}`)).json();
+    return g.eventCount;
+  };
+  const before = await evCount();
+  // 连点 3 下面板自身的按钮（若 data-observe-ignore 失效，每次都会新增一条 CLICK 事件）
+  await page.click('#btn-reload');
+  await sleep(400);
+  await page.click('#btn-fit');
+  await sleep(400);
+  await page.click('#btn-current');
+  await sleep(2500); // 等前端 flush(1.2s) + 后端落库
+  const after = await evCount();
+  check('★ 面板自身按钮不污染图（data-observe-ignore 生效）', before === after,
+    `连点 3 次面板按钮前后：事件 ${before} → ${after}${before === after ? '（未新增）' : '（新增了 ' + (after - before) + ' 条）'}`);
+  await page.screenshot({ path: path.join(OUT, '03b-console.png'), fullPage: false });
+  console.log('  截图: shots/03b-console.png（同页两栏）');
+
   // ── 4. 打开观察图 ──────────────────────────────────────────────
   console.log('\n[4/5] 打开「操作路线图」');
   const sessionId = await page.evaluate(() => sessionStorage.getItem('observe.sessionId'));

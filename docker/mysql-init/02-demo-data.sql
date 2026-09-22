@@ -1,3 +1,8 @@
+-- ★ 必须显式声明连接字符集：mysql 客户端的默认字符集取自容器 locale，
+--   常见的 POSIX/C locale 会退到 latin1，导致中文种子数据被双写编码
+--   （存进去是 UTF-8 字节，再按 utf8 读出来就是 æŽå›› 这种乱码）
+SET NAMES utf8mb4;
+
 -- demo 业务表（"最高层"裸项目的业务，与 observe 无关，仅用于产生三层事件）
 CREATE TABLE IF NOT EXISTS demo_order (
   id          BIGINT       NOT NULL AUTO_INCREMENT,

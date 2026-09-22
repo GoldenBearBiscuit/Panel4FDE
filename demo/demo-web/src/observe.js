@@ -194,6 +194,21 @@ function describe(el) {
  */
 const TOO_GENERIC = ['app', 'root', 'body', 'html', 'page', 'container', 'main'];
 
+/** ★ 声明「这段 UI 不要采集」。任意元素加上 data-observe-ignore 属性即可，
+ *  它整个子树内的点击都会被跳过。
+ *  典型用途：观测面板自己的控制按钮——面板与业务同页时，不排除就会
+ *  一边看图一边污染图（点一次「刷新」就多一个节点）。 */
+const IGNORE_ATTR = 'data-observe-ignore';
+
+function isIgnoredClick(startNode) {
+  let n = startNode;
+  while (n && n.nodeType === 1) {
+    if (n.hasAttribute && n.hasAttribute(IGNORE_ATTR)) return true;
+    n = n.parentElement;
+  }
+  return false;
+}
+
 function findTarget(start) {
   let el = start;
   let depth = 0;
@@ -255,6 +270,9 @@ function hookClicks() {
     'click',
     (e) => {
       try {
+        // ★ 被声明为不采集的区域（如观测面板自身）直接跳过
+        if (isIgnoredClick(e.target)) return;
+
         const el = findTarget(e.target);
         if (!el) return; // 空白区域/泛容器：不记录，避免污染图
         const sel = describe(el);

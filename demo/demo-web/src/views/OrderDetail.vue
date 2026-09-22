@@ -3,7 +3,7 @@
     <div class="row">
       <h2>订单详情 #{{ id }}</h2>
       <button id="btn-back" @click="$router.push('/order/list')">返回列表</button>
-      <button id="btn-go-graph" @click="$router.push('/graph')">查看操作路线图</button>
+      <button id="btn-go-graph" @click="$router.push('/graph')">全屏观测台</button>
     </div>
 
     <template v-if="order.id">
@@ -24,7 +24,7 @@
       </div>
       <p class="hint">
         保存会依次触发：<code>POST /api/order/{id}/save</code> → SQL UPDATE → Redis DEL/SET。
-        三层事件都会被采集并挂到同一个 API 节点下。
+        三层事件都会被采集并挂到同一个 API 节点下——右侧左栏实时可见。
       </p>
     </template>
     <p v-else class="hint">加载中…</p>

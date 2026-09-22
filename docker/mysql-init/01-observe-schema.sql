@@ -1,5 +1,9 @@
 -- ★ 一次定型，不可回退。与 specs/SCHEMA.md 第四节完全一致。
 -- 改动此文件 = 回退。缺列请在阶段二走「加列」流程。
+-- ★ SET NAMES 不能省：mysql 客户端默认字符集取自容器 locale，
+--   POSIX/C locale 会退到 latin1，注释里的中文会写坏。
+SET NAMES utf8mb4;
+
 CREATE TABLE IF NOT EXISTS observe_event (
   id           BIGINT       NOT NULL AUTO_INCREMENT,
   event_id     CHAR(36)     NOT NULL COMMENT '事件唯一ID(uuid)',

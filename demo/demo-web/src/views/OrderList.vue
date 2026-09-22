@@ -3,7 +3,7 @@
     <div class="row">
       <h2>订单列表</h2>
       <button id="btn-refresh" @click="load">刷新</button>
-      <button id="btn-go-graph" @click="$router.push('/graph')">查看操作路线图</button>
+      <button id="btn-go-graph" @click="$router.push('/graph')">全屏观测台</button>
     </div>
     <table>
       <thead>
@@ -22,7 +22,8 @@
     </table>
     <p class="hint">
       本页与整个前端<b>没有任何埋点代码</b>，全部事件由 observe-kit 自动采集。<br />
-      点「详情」→ 修改并保存 → 打开「操作路线图」，即可看到刚才的操作被画成了图。
+      右侧就是实时观测：点「详情」→ 改一下 → 保存，右边左栏会实时冒出记录，右栏的图会实时长大。<br />
+      （右侧面板自身的按钮已被 <code>data-observe-ignore</code> 排除，不会污染图。）
     </p>
   </div>
 </template>
