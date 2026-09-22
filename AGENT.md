@@ -142,13 +142,29 @@
 
 | 项 | 状态 |
 |---|---|
+| 代码仓库 | https://github.com/GoldenBearBiscuit/Panel4FDE （公开；库名与项目名不一致，历史原因，见下方） |
 | Docker Desktop | ✅ 已启动，Linux containers，server 29.6.1 |
 | 宿主机 Java/Maven | **无** → Java 只能在容器里跑 |
 | 宿主机 node/npm/pnpm | v24.19.0 / 11.17.0 / 11.7.0 |
 | 宿主机 Chrome | `C:\Program Files\Google\Chrome\Application\chrome.exe`（验收脚本用它） |
 | 宿主机 python | 3.12.10（阶段四用） |
-| git | 2.55.0 |
+| git | 2.55.0（Git Credential Manager 已配，凭据已缓存，push 不需再授权） |
 | 镜像加速器 | 已配（daocloud / 1ms / rat.dev / xuanyuan）。`docker manifest inspect` 会绕过加速器，勿用它测连通性 |
+
+### ★ git 工作流约束（pi 内置守卫，不可绕过）
+
+```
+BLOCKED: Direct push to protected branch. Use kickoff-branch + release-branch.
+```
+
+**agent 不得直接 `git push` 到 `main`/`master`。** 必须：
+1. 从默认分支切出特性分支（如 `feat/phase2-xxx`）
+2. 推到特性分支
+3. 由**人类所有者**在 GitHub 上合并 / 开 PR（或经 release-branch 流程）
+
+注：这是 pi 层面的守卫（不是 git hook，`.git/hooks` 为空）。
+初始提交也是推的特性分支 `feat/phase1-observe-pipeline`，因此仓库默认分支名即该特性分支；
+需要时由所有者在 GitHub Branches 页改为 `main`。
 
 ### 已知环境坑（已修，勿踩回去）
 
