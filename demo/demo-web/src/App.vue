@@ -4,7 +4,7 @@
       <strong>observe-kit demo</strong>
       <nav>
         <router-link to="/order/list">订单列表</router-link>
-        <router-link to="/graph">操作路线图</router-link>
+        <router-link to="/graph">实时观测台</router-link>
       </nav>
       <span class="session" :title="sessionId">会话 {{ sessionIdShort }}</span>
     </header>

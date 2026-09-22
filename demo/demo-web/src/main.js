@@ -13,7 +13,7 @@ const router = createRouter({
     { path: '/order/list', component: OrderList, meta: { title: '订单列表' } },
     { path: '/order/:id', component: OrderDetail, meta: { title: '订单详情' } },
     // ★ 注意不能用 /observe 前缀：那个路径被代理到后端接口了
-    { path: '/graph', component: GraphView, meta: { title: '操作路线图' } },
+    { path: '/graph', component: GraphView, meta: { title: '实时观测台' } },
   ],
 });
 

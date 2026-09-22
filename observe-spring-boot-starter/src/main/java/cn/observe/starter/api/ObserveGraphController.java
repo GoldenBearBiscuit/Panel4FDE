@@ -55,6 +55,43 @@ public class ObserveGraphController {
         return GraphBuilder.build(target, rows);
     }
 
+    /**
+     * 实时事件流接口（供观察页左栏用）。
+     *
+     * @param afterId 游标：只返回 id 大于它的新事件。首次传 0
+     * @return {sessionId, lastId, events}；下次请求把 lastId 传回 afterId 即可增量拉取
+     */
+    @GetMapping("/observe/events")
+    public Map<String, Object> events(@RequestParam(value = "sessionId", required = false) String sessionId,
+                                      @RequestParam(value = "afterId", defaultValue = "0") long afterId,
+                                      @RequestParam(value = "limit", defaultValue = "200") int limit) {
+        String target = sessionId;
+        if (target == null || target.isEmpty()) {
+            List<Map<String, Object>> list = writer.recentSessions(1);
+            target = list.isEmpty() ? null : String.valueOf(list.get(0).get("session_id"));
+        }
+
+        Map<String, Object> m = new LinkedHashMap<String, Object>();
+        m.put("sessionId", target);
+        if (target == null) {
+            m.put("lastId", afterId);
+            m.put("events", java.util.Collections.emptyList());
+            return m;
+        }
+
+        List<Map<String, Object>> rows = writer.eventsAfter(target, afterId, limit);
+        long lastId = afterId;
+        for (Map<String, Object> r : rows) {
+            Object id = r.get("id");
+            if (id instanceof Number) {
+                lastId = Math.max(lastId, ((Number) id).longValue());
+            }
+        }
+        m.put("lastId", lastId);
+        m.put("events", rows);
+        return m;
+    }
+
     /** 采集自身健康度：★ 队列丢弃数是最重要的运维指标（丢弃意味着数据缺口） */
     @GetMapping("/observe/stats")
     public Map<String, Object> stats() {

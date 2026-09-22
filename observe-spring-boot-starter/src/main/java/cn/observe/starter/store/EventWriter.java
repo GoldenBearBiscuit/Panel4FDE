@@ -86,6 +86,21 @@ public class EventWriter {
                 sessionId);
     }
 
+    /**
+     * 增量拉取：只返回 id &gt; afterId 的新事件（实时事件流用）。
+     * 用自增 id 做游标，比时间戳可靠——同一毫秒内的多条事件不会丢也不会重复。
+     */
+    public List<Map<String, Object>> eventsAfter(String sessionId, long afterId, int limit) {
+        return jdbc.queryForList(
+                "SELECT id, trace_id, step_no, layer, event_type, node_key, node_label,"
+                        + "       parent_key, edge_type, occurred_at, duration_ms, status, raw_payload"
+                        + "  FROM observe_event"
+                        + " WHERE session_id = ? AND id > ?"
+                        + " ORDER BY id ASC"
+                        + " LIMIT " + Math.max(1, Math.min(limit, 500)),
+                sessionId, afterId);
+    }
+
     private static String trim(String s, int max) {
         if (s == null) {
             return null;

@@ -25,6 +25,12 @@ const CFG = {
   maxBatch: 50,
   maxQueue: 500,
   debug: false,
+  /**
+   * 不采集的页面路径（同源前缀匹配）。
+   * ★ 观测控制台本身必须排除——否则“看图的动作”会污染被看的图，
+   *   和你轮询一次就多出一批节点。与后端排除 /observe/** 同理。
+   */
+  ignorePaths: ['/graph', '/observe'],
 };
 
 const STORE_KEY = 'observe.sessionId';
@@ -50,6 +56,9 @@ let lastNode = null;
 let enabled = true;
 let queue = [];
 let timer = null;
+/** ★ 幂等保护：HMR 会重新执行 main.js，或接入方可能调两次 initObserve，
+ *  不加保护会重复注册监听器 → 一次点击产生 N 条事件（每条还各自新建 traceId，极难排查） */
+let initialized = false;
 
 // ── 工具 ────────────────────────────────────────────────────────
 
@@ -80,10 +89,21 @@ function log(...a) {
   if (CFG.debug) console.log('%c[observe]', 'color:#0a0', ...a);
 }
 
+/** 当前页面是否在排除名单里（观测控制台自身） */
+function isIgnored() {
+  let p = '';
+  try {
+    p = window.location.pathname || '';
+  } catch (e) {
+    return false;
+  }
+  return (CFG.ignorePaths || []).some((x) => p === x || p.indexOf(x + '/') === 0);
+}
+
 // ── 事件上报 ────────────────────────────────────────────────────
 
 function push(ev) {
-  if (!enabled) return;
+  if (!enabled || isIgnored()) return;
 
   // 只在同一操作内维护 parent，避免跨操作的边乱连
   let parentKind = null;
@@ -166,6 +186,30 @@ function describe(el) {
   return el.tagName.toLowerCase() + (cls.length ? '.' + cls.join('.') : '');
 }
 
+/**
+ * 向上找最近的可描述元素。
+ * ★ 碰到 body/html/#app 这类容器必须放弃，不能返回它们——
+ *   否则所有“点击空白处”都会塌成同一个 `action:#app` 假节点，
+ *   把图的噪声集中到一个无意义节点上。（已登记的修正项）
+ */
+const TOO_GENERIC = ['app', 'root', 'body', 'html', 'page', 'container', 'main'];
+
+function findTarget(start) {
+  let el = start;
+  let depth = 0;
+  while (el && el.nodeType === 1 && depth < 8) {
+    if (el.dataset?.observeId || el.getAttribute?.('name')) return el;
+    if (el.tagName === 'BUTTON' || el.tagName === 'A' || el.tagName === 'SELECT') return el;
+    if (el.id) {
+      // id 太“泛”的容器不算可描述目标
+      return TOO_GENERIC.includes(el.id.toLowerCase()) ? null : el;
+    }
+    el = el.parentElement;
+    depth++;
+  }
+  return null;
+}
+
 function labelOf(el) {
   const t = (el.innerText || el.value || el.getAttribute?.('aria-label') || '').trim();
   return t ? t.split('\n')[0].slice(0, 32) : el.tagName.toLowerCase();
@@ -211,12 +255,8 @@ function hookClicks() {
     'click',
     (e) => {
       try {
-        let el = e.target;
-        // 向上找到最近的可描述元素（按钮/链接优先）
-        while (el && el.nodeType === 1 && !el.id && !el.dataset?.observeId &&
-               !el.getAttribute?.('name') && !(el.tagName === 'BUTTON' || el.tagName === 'A')) {
-          el = el.parentElement;
-        }
+        const el = findTarget(e.target);
+        if (!el) return; // 空白区域/泛容器：不记录，避免污染图
         const sel = describe(el);
         if (!sel) return;
 
@@ -334,6 +374,12 @@ function toPath(url) {
 // ── 初始化 ──────────────────────────────────────────────────────
 
 export function initObserve(options) {
+  if (initialized) {
+    log('已初始化过，本次调用被忽略（幂等保护）');
+    return { sessionId, enabled, endpoint: CFG.endpoint, alreadyInitialized: true };
+  }
+  initialized = true;
+
   const opts = options || {};
   Object.assign(CFG, opts.config || {});
   enabled = opts.enabled !== false;
