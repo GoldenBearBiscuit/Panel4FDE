@@ -1,0 +1,105 @@
+# observe-kit 开发环境
+# 用法:
+#   cd docker && docker compose up -d
+#   浏览器打开 http://localhost:5173       (demo 页面 + 观察图)
+#   浏览器打开 http://localhost:8080/api/order/list   (后端直连自检)
+#
+# 说明: app / web 均为源码 bind mount，改代码后重启容器即可，无需重建镜像（挂载热重载）
+
+name: observe-kit
+
+services:
+
+  # ── MySQL 8 (资源层第一类采集目标) ─────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: ok-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: observe
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks: [ok]
+
+  # ── Redis 7 (资源层第二类采集目标) ─────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ok-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [ok]
+
+  # ── 后端: JDK8 + Maven 3.9 (与 yudao 一致的技术栈) ──────────────
+  app:
+    image: maven:3.9-eclipse-temurin-8
+    container_name: ok-app
+    working_dir: /workspace
+    environment:
+      TZ: Asia/Shanghai
+      MAVEN_OPTS: "-Dfile.encoding=UTF-8"
+    # 首次启动: 全量 install(把 core/starter 装进 .m2) 再跑 demo-app
+    command: >
+      sh -c "mvn -q -B -DskipTests install && exec mvn -q -B -f demo/demo-app/pom.xml spring-boot:run"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../:/workspace
+      - m2-cache:/root/.m2          # Maven 本地仓库缓存，避免每次重下依赖
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [ok]
+
+  # ── 前端: Vue3 + Vite ─────────────────────────────────────────
+  web:
+    image: node:24-alpine
+    container_name: ok-web
+    working_dir: /workspace/demo/demo-web
+    environment:
+      TZ: Asia/Shanghai
+    command: >
+      sh -c "npm install --no-audit --no-fund && exec npm run dev -- --host 0.0.0.0 --port 5173"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../:/workspace
+      - web-node-modules:/workspace/demo/demo-web/node_modules  # 不能在 Windows↔Linux 间 bind mount
+      - web-npm-cache:/root/.npm
+    depends_on:
+      - app
+    networks: [ok]
+
+volumes:
+  mysql-data:
+  redis-data:
+  m2-cache:
+  web-node-modules:
+  web-npm-cache:
+
+networks:
+  ok:
+    driver: bridge

@@ -1,0 +1,41 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: demo-app
+
+  datasource:
+    url: jdbc:mysql://mysql:3306/observe?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      pool-name: demo-pool
+
+  # Spring Boot 2.7 的 redis 配置前缀是 spring.redis（3.x 才是 spring.data.redis）
+  redis:
+    host: redis
+    port: 6379
+    timeout: 1500ms
+
+# ★ 插件的全部配置。所有项都有默认值，这里只是为了演示与排查
+observe:
+  enabled: true
+  collect-api: true
+  collect-sql: true
+  collect-redis: true
+  # 记录请求体：demo 里打开以便在图上看清"保存了什么"。生产环境慎开
+  capture-body: true
+  # 把每条事件打到日志（排查采集是否生效时很有用）
+  log-events: false
+  queue-capacity: 5000
+  batch-size: 200
+  raw-payload-max-length: 2000
+
+logging:
+  level:
+    cn.observe: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%X{traceId:-}] %-28logger{0} - %msg%n"

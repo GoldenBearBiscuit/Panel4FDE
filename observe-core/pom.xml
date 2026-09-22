@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>cn.observe</groupId>
+        <artifactId>observe-kit</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>observe-core</artifactId>
+    <name>observe-core</name>
+    <description>★纯 Java8，零运行时依赖：事件模型 + 归一化 + 脱敏</description>
+
+    <!--
+      ★ 冻结约束（AGENT.md 第五节）:
+        本模块不允许引入 Spring / Servlet 任何依赖，且必须保持 Java 8 语言级别。
+        理由: 需同时服务 SB2.7(javax.servlet) 与 SB3.x(jakarta.servlet)。
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
