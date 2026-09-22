@@ -226,6 +226,23 @@ try {
   await page.screenshot({ path: path.join(OUT, '06-human-only.png') });
   await page.click('#chk-human');
   await sleep(600);
+
+  // ★ 泳道图：同一份数据、只换渲染布局
+  console.log('\n[5c/5] 泳道图渲染');
+  await page.click('#btn-view-swim');
+  await sleep(2000);
+  const sw = await page.evaluate(() => window.__graphInfo);
+  console.log('  泳道图信息:', JSON.stringify(sw));
+  check('泳道图渲染成功', !!sw && sw.mode === 'swim' && sw.nodes > 0 && sw.layout === 'ok', JSON.stringify(sw));
+  check('★ 泳道自检通过：节点全在自己的泳道带内', sw && sw.laneViolations === 0,
+    `违规 ${sw && sw.laneViolations} 个节点`);
+  const laneLabels = await page.$$eval('.lane-label', (e) => e.map((x) => x.textContent.trim()));
+  check('三条泳道齐全', laneLabels.length === 3, laneLabels.join(' / '));
+  const colHeads = await page.$$eval('.col-head', (e) => e.map((x) => x.textContent.trim()));
+  check('列标题（时序）已生成', colHeads.length > 1, colHeads.join(' '));
+  check('泳道图复用同一份图数据（节点数一致）', sw && sw.nodes === 19, `nodes=${sw && sw.nodes}`);
+  await page.screenshot({ path: path.join(OUT, '07-swimlane.png') });
+  console.log('  截图: shots/07-swimlane.png（泳道图）');
 } catch (e) {
   check('执行过程未抛异常', false, e.message);
   await page.screenshot({ path: path.join(OUT, '99-failure.png') }).catch(() => {});

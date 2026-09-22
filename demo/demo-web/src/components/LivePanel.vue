@@ -16,6 +16,10 @@
       </label>
       <button id="btn-reload" @click="reload" title="重新拉取当前会话">刷新</button>
       <button id="btn-current" @click="useCurrent" title="跳到当前浏览器会话">当前会话</button>
+      <span class="seg">
+        <button id="btn-view-flow" :class="{ on: viewMode === 'flow' }" @click="setView('flow')" title="按调用关系自动布局">流程图</button>
+        <button id="btn-view-swim" :class="{ on: viewMode === 'swim' }" @click="setView('swim')" title="泳道图：横向=时序，纵向=层">泳道图</button>
+      </span>
       <button id="btn-fit" @click="fitAll" title="缩放到一屏">适应画布</button>
       <span class="stat" :title="statsTip">
         <b>{{ events.length }}</b>/<b>{{ d.nodeCount || 0 }}</b>/<b>{{ d.edgeCount || 0 }}</b>
@@ -76,7 +80,51 @@
           </span>
           <span class="hint-inline">可拖拽/缩放</span>
         </div>
-        <div ref="el" class="canvas"></div>
+        <!-- 流程图：按调用关系自动布局（dagre，异步） -->
+        <div v-if="viewMode === 'flow'" ref="el" class="canvas"></div>
+
+        <!-- 泳道图：固定布局，x = 步序，y = 层。不用 dagre，故无异步收敛问题 -->
+        <div v-else class="swim-wrap">
+          <div ref="labelCol" class="swim-labels" :style="{ height: swim.contentH + 'px' }">
+            <div
+              v-for="(l, i) in swim.lanes"
+              :key="l.key"
+              class="lane-label"
+              :style="{
+                top: swim.laneY[i] + 'px',
+                height: swim.laneH[i] + 'px',
+                color: l.color,
+                borderLeftColor: l.color,
+              }"
+            >
+              {{ l.name }}
+            </div>
+          </div>
+          <div class="swim-scroll" @scroll="onSwimScroll">
+            <div class="swim-inner" :style="{ width: swim.contentW + 'px', height: swim.contentH + 'px' }">
+              <div
+                v-for="(l, i) in swim.lanes"
+                :key="'b' + l.key"
+                class="lane-band"
+                :style="{ top: swim.laneY[i] + 'px', height: swim.laneH[i] + 'px', background: l.bg }"
+              ></div>
+              <div
+                v-for="(c, i) in swim.cols"
+                :key="'c' + i"
+                class="col-head"
+                :style="{ left: swim.colX[i] + 'px', width: swim.colW[i] + 'px' }"
+              >
+                {{ c }}
+              </div>
+              <div
+                ref="el"
+                class="swim-canvas"
+                :style="{ width: swim.contentW + 'px', height: swim.contentH + 'px' }"
+              ></div>
+            </div>
+          </div>
+        </div>
+
         <div v-if="!d.nodeCount" class="empty">还没有节点。</div>
       </section>
     </div>
@@ -103,6 +151,18 @@ const error = ref(null);
 const auto = ref(true);
 /** 只看人为操作：滤掉 AUTO（页面自动发的请求）与 PRECEDES（时序兜底） */
 const humanOnly = ref(false);
+/** flow = 按调用关系自动布局；swim = 泳道图（x=步序，y=层） */
+const viewMode = ref('flow');
+const labelCol = ref(null);
+const NODE_H = 30;
+const NODE_GAP = 8;
+const SWIM_TOP = 26;
+const LANE_DEF = [
+  { key: 'FRONTEND', name: '前端', color: '#5b8ff9', bg: 'rgba(91,143,249,0.06)' },
+  { key: 'BACKEND', name: '后端', color: '#f6bd16', bg: 'rgba(246,189,22,0.08)' },
+  { key: 'RESOURCE', name: '资源层', color: '#5ad8a6', bg: 'rgba(90,216,166,0.08)' },
+];
+const swim = ref({ lanes: LANE_DEF, laneY: [], laneH: [], cols: [], colX: [], colW: [], contentW: 0, contentH: 0 });
 const newCount = ref(0);
 const dropped = ref(0);
 const statsTip = ref('');
@@ -205,6 +265,211 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
+/**
+ * ★ 流程图的布局收敛定时器必须可取消。
+ *   否则切到泳道图后，这些定时器才触发，会在**泳道图**上跑 changeSize/translate
+ *   把布局搞歪，并覆盖 __graphInfo（已由验收脚本捕获：laneViolations 变 undefined）。
+ */
+let flowTimers = [];
+function clearFlowTimers() {
+  for (const t of flowTimers) clearTimeout(t);
+  flowTimers = [];
+}
+
+/** 估算节点宽度（与文字长度挂钩，让布局知道标签会占多宽） */
+function nodeW(label) {
+  const s = truncate(label, 22);
+  return Math.max(66, Math.min(260, s.length * 7.6 + 22));
+}
+
+function setGraphInfo(nodes, edges, w, h, extra) {
+  try {
+    window.__graphInfo = Object.assign(
+      {
+        mode: viewMode.value,
+        nodes: nodes,
+        edges: edges,
+        zoom: graph ? graph.getZoom() : null,
+        canvasW: w,
+        canvasH: h,
+        layout: graph ? 'ok' : 'failed',
+      },
+      extra || {}
+    );
+  } catch (e) {
+    /* 忽略 */
+  }
+}
+
+function setView(m) {
+  if (viewMode.value === m) return;
+  viewMode.value = m;
+  clearFlowTimers();
+  if (graph) {
+    graph.destroy();
+    graph = null;
+  }
+  nextTick(() => render());
+}
+
+function onSwimScroll(e) {
+  // 泳道名固定不动，靠反向位移跟随纵向滚动
+  if (labelCol.value) labelCol.value.style.transform = `translateY(${-e.target.scrollTop}px)`;
+}
+
+function render() {
+  return viewMode.value === 'swim' ? renderSwim() : renderFlow();
+}
+
+// ── 泳道图：x = 步序，y = 层。固定布局，不用 dagre（故无异步收敛问题） ───
+function renderSwim() {
+  const data = d.value;
+  clearFlowTimers();
+  if (graph) {
+    graph.destroy();
+    graph = null;
+  }
+  if (!data || !data.nodes || !data.nodes.length) {
+    swim.value = { lanes: LANE_DEF, laneY: [], laneH: [], cols: [], colX: [], colW: [], contentW: 0, contentH: 0 };
+    return;
+  }
+
+  let ns = data.nodes.slice();
+  let es = data.edges.slice();
+  if (humanOnly.value) {
+    es = es.filter((e) => e.type !== 'AUTO' && e.type !== 'PRECEDES');
+    const kept = new Set();
+    es.forEach((e) => { kept.add(e.source); kept.add(e.target); });
+    ns = ns.filter((n) => kept.has(n.id));
+  } else {
+    // 泳道图里 x 轴已经是时序，PRECEDES 纯属噪声
+    es = es.filter((e) => e.type !== 'PRECEDES');
+  }
+  if (!ns.length) {
+    swim.value = { lanes: LANE_DEF, laneY: [], laneH: [], cols: [], colX: [], colW: [], contentW: 0, contentH: 0 };
+    error.value = humanOnly.value ? '当前会话里还没有“人为触发”的节点；取消勾选「只看人为」看全部。' : null;
+    return;
+  }
+  error.value = null;
+
+  // 1) 列 = 去重排序的步序
+  const steps = Array.from(new Set(ns.map((n) => n.step || 0))).sort((a, b) => a - b);
+  const colOf = {};
+  steps.forEach((s, i) => { colOf[s] = i; });
+
+  // 2) 列宽 = 该列最宽节点 + 间距
+  const colW = steps.map((s) => {
+    const ws = ns.filter((n) => (n.step || 0) === s).map((n) => nodeW(n.label));
+    return Math.max(70, ...ws) + 34;
+  });
+  const colX = [];
+  let acc = 12;
+  steps.forEach((s, i) => { colX.push(acc); acc += colW[i]; });
+  const contentW = acc + 12;
+
+  // 3) 每层的高度 = 该层最多的单元格内节点数
+  const laneH = LANE_DEF.map((l) => {
+    const per = {};
+    ns.filter((n) => n.layer === l.key).forEach((n) => {
+      const k = n.step || 0;
+      per[k] = (per[k] || 0) + 1;
+    });
+    const rows = Math.max(1, ...Object.values(per));
+    return rows * (NODE_H + NODE_GAP) + NODE_GAP;
+  });
+  const laneY = [];
+  let y = SWIM_TOP;
+  laneH.forEach((h) => { laneY.push(y); y += h + 6; });
+  const contentH = y + 8;
+
+  // 4) 节点坐标
+  const seen = {};
+  const nodes = ns.map((n) => {
+    let li = LANE_DEF.findIndex((l) => l.key === n.layer);
+    if (li < 0) li = 1;
+    const ci = colOf[n.step || 0] || 0;
+    const k = li + '|' + ci;
+    const idx = seen[k] === undefined ? (seen[k] = 0) : (seen[k] = seen[k] + 1);
+    const w = nodeW(n.label);
+    return {
+      id: n.id,
+      label: truncate(n.label, 22),
+      type: 'rect',
+      size: [w, NODE_H],
+      x: colX[ci] + colW[ci] / 2,
+      y: laneY[li] + NODE_GAP + idx * (NODE_H + NODE_GAP) + NODE_H / 2,
+      style: {
+        fill: (COLOR[n.layer] || '#999') + '2e',
+        stroke: COLOR[n.layer] || '#999',
+        lineWidth: 1.4,
+        radius: 4,
+      },
+      labelCfg: { style: { fontSize: 11, fill: '#222' } },
+    };
+  });
+
+  const SWIM_EDGE = {
+    TRIGGER: { stroke: '#5a6b7d', endArrow: true },
+    NAVIGATE: { stroke: '#5a6b7d', endArrow: true },
+    AUTO: { stroke: '#c9ccd1', endArrow: true },
+    CALL: { stroke: '#8aa4a0', endArrow: true },
+  };
+  const edges = es.map((e, i) => ({
+    id: 'e' + i,
+    source: e.source,
+    target: e.target,
+    edgeType: e.type,
+    // CALL 数量多，省掉文字标签，颜色已能表达
+    label: e.type === 'CALL' ? '' : e.type,
+    style: SWIM_EDGE[e.type] || { stroke: '#9aa4b2', endArrow: true },
+    labelCfg: { style: { fontSize: 9, fill: '#7a8290' } },
+  }));
+
+  swim.value = {
+    lanes: LANE_DEF,
+    laneY,
+    laneH,
+    colX,
+    colW,
+    cols: steps.map((s, i) => '#' + (i + 1)),
+    contentW,
+    contentH,
+  };
+
+  if (!el.value) return;
+  graph = new G6.Graph({
+    container: el.value,
+    width: contentW,
+    height: contentH,
+    fitView: false,
+    zoom: 1,
+    // 位置是算出来的，禁用拖拽节点（否则用户能拖乱布局）
+    modes: { default: ['drag-canvas', 'zoom-canvas'] },
+    defaultNode: { type: 'rect', size: [90, NODE_H] },
+    defaultEdge: { type: 'line' },
+    animate: false,
+  });
+  graph.data({ nodes, edges });
+  graph.render();
+
+  // ★ 泳道自检：每个节点必须落在它所属层的泳道带内。
+  //   泳道图的核心正确性约束，出错了图就失去含义。
+  let violations = 0;
+  for (let i = 0; i < ns.length; i++) {
+    let li = LANE_DEF.findIndex((l) => l.key === ns[i].layer);
+    if (li < 0) li = 1;
+    const top = laneY[li];
+    const bottom = top + laneH[li];
+    if (!(nodes[i].y >= top && nodes[i].y <= bottom)) violations++;
+  }
+  setGraphInfo(nodes.length, edges.length, contentW, contentH, {
+    laneCount: LANE_DEF.length,
+    laneViolations: violations,
+    colCount: steps.length,
+  });
+}
+
+// ── 流程图：按调用关系自动布局 ─────────────────────────────
 function contentBounds() {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   graph.getNodes().forEach((nd) => {
@@ -221,6 +486,8 @@ function contentBounds() {
 }
 
 function fitCanvasToContent() {
+  // ★ 模式守卫：切到泳道图后，本函数不得再动图（它的定位逻辑是给 dagre 写的）
+  if (viewMode.value !== 'flow') return;
   if (!graph || fitting || !el.value) return;
   fitting = true;
   try {
@@ -278,7 +545,7 @@ function fitCanvasToContent() {
   }
 }
 
-function render() {
+function renderFlow() {
   const data = d.value;
   if (!el.value) return;
   if (graph) {
@@ -370,10 +637,11 @@ function render() {
     graph.render();
     // ★ 多次复算：dagre 在节点多时不是一次就稳定，400ms 后量到的尺寸会偏小，
     //   导致画布定窄了、右边缘被截（已由截图发现）。
-    //   实测 400/1000/1800ms 三次收敛；fitting 互斥锁防重入。
-    setTimeout(fitCanvasToContent, 400);
-    setTimeout(fitCanvasToContent, 1000);
-    setTimeout(fitCanvasToContent, 1800);
+    //   实测 400/1000/1800ms 三次收敛；fitting 互斥锁防重入；定时器可取消。
+    clearFlowTimers();
+    flowTimers.push(setTimeout(fitCanvasToContent, 400));
+    flowTimers.push(setTimeout(fitCanvasToContent, 1000));
+    flowTimers.push(setTimeout(fitCanvasToContent, 1800));
   } catch (e) {
     error.value = 'dagre 失败，降级 force：' + e.message;
     try {
@@ -381,8 +649,9 @@ function render() {
       graph.on('afterlayout', fitCanvasToContent);
       graph.data({ nodes, edges });
       graph.render();
-      setTimeout(fitCanvasToContent, 400);
-      setTimeout(fitCanvasToContent, 1000);
+      clearFlowTimers();
+      flowTimers.push(setTimeout(fitCanvasToContent, 400));
+      flowTimers.push(setTimeout(fitCanvasToContent, 1000));
     } catch (e2) {
       error.value = '图渲染失败：' + e2.message;
     }
@@ -464,6 +733,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (timer) clearTimeout(timer);
+  clearFlowTimers();
   for (const t of flashTimers) clearTimeout(t);
   flashTimers = [];
   if (graph) graph.destroy();
@@ -516,6 +786,27 @@ onUnmounted(() => {
 .graphbox { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column;
             border: 1px solid #eef0f2; border-radius: 4px; background: #fcfcfd; }
 .graphbox .canvas { overflow: auto; flex: 1; min-height: 0; cursor: grab; }
+
+/* ── 泳道图 ── */
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 4px 4px 0; }
+.seg button.on { background: #3367d6; color: #fff; border-color: #3367d6; }
+
+.swim-wrap { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.swim-labels { width: 64px; flex: none; position: relative; background: #fafbfc;
+               border-right: 1px solid #eef0f2; will-change: transform; }
+.lane-label { position: absolute; left: 0; right: 0; display: flex; align-items: center;
+              justify-content: center; font-size: 11px; font-weight: 600;
+              border-left: 3px solid #999; }
+.swim-scroll { flex: 1; min-width: 0; overflow: auto; }
+.swim-inner { position: relative; }
+.lane-band { position: absolute; left: 0; right: 0; }
+.col-head { position: absolute; top: 5px; text-align: center; font-size: 10px; color: #9aa4b2;
+            font-family: ui-monospace, Consolas, monospace; }
+.swim-canvas { position: absolute; top: 0; left: 0; }
+.swim-canvas canvas { background: transparent; }
 
 .panel-head { display: flex; align-items: center; gap: 8px; padding: 5px 9px; font-size: 12px;
               font-weight: 600; color: #444; border-bottom: 1px solid #eef0f2; background: #fafbfc;

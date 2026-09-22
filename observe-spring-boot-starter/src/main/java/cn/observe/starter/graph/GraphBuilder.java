@@ -50,7 +50,14 @@ public final class GraphBuilder {
 
             Node n = nodes.get(nodeKey);
             if (n == null) {
-                n = new Node(nodeKey, label, layer, type);
+                // ★ 记下节点首次出现的步序：泳道图靠它定位 x 轴（时间/序列）。
+                //   行已按 (step_no, occurred_at, id) 排序，所以首个出现的 step 就是最早步序。
+                int step = 0;
+                Object sv = row.get("step_no");
+                if (sv instanceof Number) {
+                    step = ((Number) sv).intValue();
+                }
+                n = new Node(nodeKey, label, layer, type, step);
                 nodes.put(nodeKey, n);
             } else {
                 if (n.label == null || n.label.isEmpty()) {
@@ -134,16 +141,19 @@ public final class GraphBuilder {
         String label;
         String layer;
         final String type;
+        /** 首次出现的步序（泳道图的 x 轴坐标依据） */
+        final int step;
         int count;
         long totalMs;
         boolean hasDuration;
         int errorCount;
 
-        Node(String id, String label, String layer, String type) {
+        Node(String id, String label, String layer, String type, int step) {
             this.id = id;
             this.label = label;
             this.layer = layer;
             this.type = type;
+            this.step = step;
         }
 
         Map<String, Object> toMap() {
@@ -152,6 +162,7 @@ public final class GraphBuilder {
             m.put("label", label == null || label.isEmpty() ? id : label);
             m.put("layer", layer);
             m.put("type", type);
+            m.put("step", step);
             m.put("count", count);
             m.put("totalMs", hasDuration ? totalMs : null);
             m.put("avgMs", hasDuration && count > 0 ? totalMs / count : null);
