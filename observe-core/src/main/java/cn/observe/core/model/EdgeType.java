@@ -8,11 +8,20 @@ package cn.observe.core.model;
  */
 public enum EdgeType {
 
+    /**
+     * action → api / action → page。★「人干的」：由用户交互引发。
+     * 模型要学的是这一类——不区分人与自动，模型学到的就是噪声。
+     */
+    TRIGGER,
+
+    /**
+     * page → api。★「页面自动干的」：组件挂载、轮询、预加载等，无人干预。
+     * 与 {@link #TRIGGER} 严格区分，区分的依据是 parent 节点的类型，不需要额外字段。
+     */
+    AUTO,
+
     /** page → page，前端路由切换 */
     NAVIGATE,
-
-    /** action → api，前端发起的请求 */
-    TRIGGER,
 
     /** api → sql / api → redis，后端资源层调用 */
     CALL,

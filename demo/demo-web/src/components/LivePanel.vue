@@ -11,6 +11,9 @@
         </option>
       </select>
       <label class="chk"><input type="checkbox" v-model="auto" /> 自动</label>
+      <label class="chk" title="只保留 TRIGGER / NAVIGATE / CALL 边与相关节点，滤掉页面自动发的请求（AUTO）和时序兜底（PRECEDES）">
+        <input id="chk-human" type="checkbox" v-model="humanOnly" @change="render()" /> 只看人为
+      </label>
       <button id="btn-reload" @click="reload" title="重新拉取当前会话">刷新</button>
       <button id="btn-current" @click="useCurrent" title="跳到当前浏览器会话">当前会话</button>
       <button id="btn-fit" @click="fitAll" title="缩放到一屏">适应画布</button>
@@ -48,7 +51,11 @@
             <span class="ly" :style="{ color: layerOf(e.layer).c }">{{ layerOf(e.layer).t }}</span>
             <span class="et">{{ e.event_type }}</span>
             <span class="lb">{{ e.node_label || e.node_key }}</span>
-            <span v-if="e.edge_type && e.edge_type !== 'PRECEDES'" class="edge">←{{ e.edge_type }}</span>
+            <span
+              v-if="e.edge_type && e.edge_type !== 'PRECEDES'"
+              class="edge"
+              :class="e.edge_type === 'AUTO' ? 'edge-auto' : 'edge-human'"
+            >←{{ e.edge_type }}</span>
             <span v-if="e.duration_ms != null" class="ms">{{ e.duration_ms }}ms</span>
             <span v-if="e.status === 'ERROR'" class="err-tag">ERROR</span>
           </div>
@@ -63,7 +70,9 @@
             <i style="background: #5b8ff9"></i>前端
             <i style="background: #f6bd16"></i>后端
             <i style="background: #5ad8a6"></i>资源层
-            <i class="dash"></i>虚=PRECEDES
+            <i class="ln-human"></i>实线=人为
+            <i class="ln-auto"></i>浅线=自动
+            <i class="ln-dash"></i>虚线=PRECEDES
           </span>
           <span class="hint-inline">可拖拽/缩放</span>
         </div>
@@ -92,6 +101,8 @@ const events = ref([]);
 const d = ref({});
 const error = ref(null);
 const auto = ref(true);
+/** 只看人为操作：滤掉 AUTO（页面自动发的请求）与 PRECEDES（时序兜底） */
+const humanOnly = ref(false);
 const newCount = ref(0);
 const dropped = ref(0);
 const statsTip = ref('');
@@ -106,7 +117,6 @@ let tickCount = 0;
 
 const COLOR = { FRONTEND: '#5b8ff9', BACKEND: '#f6bd16', RESOURCE: '#5ad8a6' };
 const LABEL = { FRONTEND: '前端', BACKEND: '后端', RESOURCE: '资源' };
-const SHAPE = { FRONTEND: 'circle', BACKEND: 'rect', RESOURCE: 'diamond' };
 
 const layerOf = (l) => ({ c: COLOR[l] || '#999', t: LABEL[l] || l || '?' });
 const short = (s) => (s ? String(s).slice(0, 8) : '-');
@@ -200,10 +210,12 @@ function contentBounds() {
   graph.getNodes().forEach((nd) => {
     const m = nd.getModel();
     if (typeof m.x !== 'number' || typeof m.y !== 'number') return;
-    minX = Math.min(minX, m.x - 80);
-    maxX = Math.max(maxX, m.x + 80);
-    minY = Math.min(minY, m.y - 30);
-    maxY = Math.max(maxY, m.y + 46);
+    const halfW = (Array.isArray(m.size) ? m.size[0] : 80) / 2 + 8;
+    const halfH = (Array.isArray(m.size) ? m.size[1] : 32) / 2 + 8;
+    minX = Math.min(minX, m.x - halfW);
+    maxX = Math.max(maxX, m.x + halfW);
+    minY = Math.min(minY, m.y - halfH);
+    maxY = Math.max(maxY, m.y + halfH);
   });
   return isFinite(minX) ? { minX, minY, maxX, maxY } : null;
 }
@@ -214,22 +226,46 @@ function fitCanvasToContent() {
   try {
     const b = contentBounds();
     if (!b) return;
-    const w = el.value.clientWidth || 600;
-    const needH = Math.ceil(b.maxY - b.minY) + 70;
-    const h = Math.min(MAX_CANVAS_H, Math.max(MIN_CANVAS_H, needH));
+    const boxW = el.value.clientWidth || 600;
+    const contentW = Math.ceil(b.maxX - b.minX) + 110;
+    const contentH = Math.ceil(b.maxY - b.minY) + 70;
+    const w = Math.min(6000, Math.max(boxW, contentW));
+    const h = Math.min(MAX_CANVAS_H, Math.max(MIN_CANVAS_H, contentH));
     if (el.value.clientHeight !== h) {
-      graph.changeSize(w, h);
       el.value.style.height = h + 'px';
     }
-    graph.translate(70 - b.minX, 30 - b.minY);
+    // ★ changeSize 必须在 translate 之前：它可能重置视口变换
+    graph.changeSize(w, h);
+
+    // ★ translate 是「相对当前变换」，不是绝对设置。
+    //   布局收敛期会调多次 → 偏移会累积（已由截图发现：内容越跑越偏）。
+    //   所以必须用「当前画布包围盒」反推位移，这样调多少次都收敛到同一位置。
+    try {
+      const cb = graph.getGroup().getCanvasBBox();
+      if (cb && cb.width > 0) {
+        graph.translate(70 - cb.minX, 30 - cb.minY);
+      } else {
+        graph.translate(70 - b.minX, 30 - b.minY);
+      }
+    } catch (e3) {
+      graph.translate(70 - b.minX, 30 - b.minY); // 兑底：拿不到包围盒就用推算值
+    }
     window.__graphBounds = b;
     try {
+      let cb = null;
+      try {
+        const b2 = graph.getGroup().getCanvasBBox();
+        cb = { x: Math.round(b2.minX), y: Math.round(b2.minY), w: Math.round(b2.width), h: Math.round(b2.height) };
+      } catch (e2) { /* ignore */ }
       window.__graphInfo = {
-        nodes: d.value ? d.value.nodes.length : null,
-        edges: d.value ? d.value.edges.length : null,
+        // 用图上实际数量（而非全量数据），这样过滤开关的效果也可被断言
+        nodes: graph.getNodes().length,
+        edges: graph.getEdges().length,
         zoom: graph.getZoom(),
+        canvasW: el.value.clientWidth,
         canvasH: el.value.clientHeight,
         bounds: b,
+        canvasBBox: cb,
         layout: 'ok',
       };
     } catch (e) {
@@ -251,30 +287,67 @@ function render() {
   }
   if (!data || !data.nodes || !data.nodes.length) return;
 
-  const nodes = data.nodes.map((n) => ({
-    id: n.id,
-    label: truncate(n.label, 22),
-    type: SHAPE[n.layer] || 'rect',
-    style: {
-      fill: (COLOR[n.layer] || '#999') + '33',
-      stroke: COLOR[n.layer] || '#999',
-      lineWidth: 1.5,
-    },
-    labelCfg: { position: 'bottom', style: { fontSize: 12, fill: '#333' } },
-  }));
+  // 边的样式：颜色 = 语义。深色=人为，浅灰=页面自动，绿灰=资源调用，极浅虚=时序兜底
+  const EDGE_STYLE = {
+    TRIGGER: { stroke: '#5a6b7d', endArrow: true },
+    NAVIGATE: { stroke: '#5a6b7d', endArrow: true },
+    AUTO: { stroke: '#c9ccd1', endArrow: true },
+    CALL: { stroke: '#8aa4a0', endArrow: true },
+    PRECEDES: { stroke: '#e3e5e8', lineDash: [6, 5], endArrow: true },
+  };
 
-  const edges = data.edges.map((e, i) => ({
+  // ★ 节点用「宽框 + 文字放框内」而不是「小图形 + 下方标签」：
+  //   dagre 按节点尺寸排布，不知道标签会溢出节点框，
+  //   用小图形时相邻节点的标签会互相压在一起读不了（已由截图发现）。
+  //   把标签宽度作为节点尺寸交给布局，就不会重叠。层用颜色区分（形状不再承载信息）。
+  let rawNodes = data.nodes.map((n) => {
+    const label = truncate(n.label, 26);
+    const w = Math.max(64, Math.min(280, label.length * 7.6 + 22));
+    return {
+      id: n.id,
+      label,
+      type: 'rect',
+      size: [w, 32],
+      style: {
+        fill: (COLOR[n.layer] || '#999') + '26',
+        stroke: COLOR[n.layer] || '#999',
+        lineWidth: 1.4,
+        radius: 4,
+      },
+      labelCfg: { style: { fontSize: 11, fill: '#222' } },
+    };
+  });
+
+  let rawEdges = data.edges.map((e, i) => ({
     id: 'e' + i,
     source: e.source,
     target: e.target,
     edgeType: e.type,
     label: e.type === 'PRECEDES' ? '' : e.type,
-    style:
-      e.type === 'PRECEDES'
-        ? { stroke: '#ccc', lineDash: [4, 4], endArrow: true }
-        : { stroke: '#9aa4b2', endArrow: true },
+    style: EDGE_STYLE[e.type] || { stroke: '#9aa4b2', endArrow: true },
     labelCfg: { style: { fontSize: 10, fill: '#7a8290' } },
   }));
+
+  // 「只看人为」：先筛边，再筛节点（只保留出现在保留边上的节点）
+  let nodes = rawNodes;
+  let edges = rawEdges;
+  if (humanOnly.value) {
+    edges = rawEdges.filter((e) => e.edgeType !== 'AUTO' && e.edgeType !== 'PRECEDES');
+    const kept = new Set();
+    for (const e of edges) {
+      kept.add(e.source);
+      kept.add(e.target);
+    }
+    nodes = rawNodes.filter((n) => kept.has(n.id));
+  }
+
+  if (!nodes.length) {
+    error.value = humanOnly.value
+      ? '当前会话里还没有“人为触发”的节点。取消勾选「只看人为」看全部，或先去左侧点几下。'
+      : null;
+    return;
+  }
+  error.value = null;
 
   const makeCfg = (layout) => ({
     container: el.value,
@@ -284,17 +357,23 @@ function render() {
     zoom: 1,
     modes: { default: ['drag-canvas', 'zoom-canvas', 'drag-node'] },
     layout,
-    defaultNode: { size: 38 },
+    defaultNode: { size: [80, 32] },
     defaultEdge: { type: 'polyline' },
     animate: false,
   });
 
   try {
-    graph = new G6.Graph(makeCfg({ type: 'dagre', rankdir: 'TB', nodesep: 26, ranksep: 46 }));
+    // TB：时间从上往下。宽框后 dagre 会按“标签宽度”分配水平空间，不会重叠
+    graph = new G6.Graph(makeCfg({ type: 'dagre', rankdir: 'TB', nodesep: 18, ranksep: 40 }));
     graph.on('afterlayout', fitCanvasToContent);
     graph.data({ nodes, edges });
     graph.render();
-    setTimeout(fitCanvasToContent, 350);
+    // ★ 多次复算：dagre 在节点多时不是一次就稳定，400ms 后量到的尺寸会偏小，
+    //   导致画布定窄了、右边缘被截（已由截图发现）。
+    //   实测 400/1000/1800ms 三次收敛；fitting 互斥锁防重入。
+    setTimeout(fitCanvasToContent, 400);
+    setTimeout(fitCanvasToContent, 1000);
+    setTimeout(fitCanvasToContent, 1800);
   } catch (e) {
     error.value = 'dagre 失败，降级 force：' + e.message;
     try {
@@ -302,7 +381,8 @@ function render() {
       graph.on('afterlayout', fitCanvasToContent);
       graph.data({ nodes, edges });
       graph.render();
-      setTimeout(fitCanvasToContent, 350);
+      setTimeout(fitCanvasToContent, 400);
+      setTimeout(fitCanvasToContent, 1000);
     } catch (e2) {
       error.value = '图渲染失败：' + e2.message;
     }
@@ -428,6 +508,8 @@ onUnmounted(() => {
 .ev .et { flex: none; width: 68px; color: #666; }
 .ev .lb { color: #222; overflow: hidden; text-overflow: ellipsis; }
 .ev .edge { color: #b0b7c3; flex: none; }
+.ev .edge-human { color: #5a6b7d; font-weight: 600; }
+.ev .edge-auto { color: #c9ccd1; }
 .ev .ms { color: #9aa4b2; flex: none; }
 .ev .err-tag { color: #b33; font-weight: 600; flex: none; }
 
@@ -443,6 +525,9 @@ onUnmounted(() => {
 .legend { display: flex; align-items: center; gap: 3px; font-weight: 400; color: #666; font-size: 11px; }
 .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-left: 5px; }
 .legend i.dash { background: none; border-top: 2px dashed #ccc; height: 0; width: 12px; margin-top: 4px; }
+.legend i.ln-human { background: #5a6b7d; height: 2px; width: 12px; border-radius: 0; }
+.legend i.ln-auto { background: #c9ccd1; height: 2px; width: 12px; border-radius: 0; }
+.legend i.ln-dash { background: none; border-top: 2px dashed #e3e5e8; height: 0; width: 12px; margin-top: 4px; }
 .empty { padding: 20px; color: #9aa4b2; font-size: 12px; line-height: 1.9; text-align: center; }
 .err { margin: 6px 0; padding: 7px 9px; background: #fff3f3; border: 1px solid #ffd0d0;
        color: #b33; font-size: 12px; border-radius: 4px; flex: none; }

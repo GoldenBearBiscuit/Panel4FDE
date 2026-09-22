@@ -31,6 +31,12 @@ const CFG = {
    *   和你轮询一次就多出一批节点。与后端排除 /observe/** 同理。
    */
   ignorePaths: ['/graph', '/observe'],
+  /**
+   * 意图窗口：与最近一次用户交互相隔多久内的请求，算「人干的」。
+   * 超过这个窗口的请求（组件挂载拉数据、轮询、预加载）算「页面自动干的」。
+   * 两者在图上是不同的边：action→api = TRIGGER，page→api = AUTO。
+   */
+  intentWindowMs: 1200,
 };
 
 const STORE_KEY = 'observe.sessionId';
@@ -53,6 +59,16 @@ let currentTrace = null;
 let currentStep = 0;
 /** 上一个节点，用于生成 parent（建 NAVIGATE / PRECEDES 边） */
 let lastNode = null;
+
+// ── 「人干的 vs 页面自动干的」判定状态 ──────────────────────
+/** 最近一次用户交互的时间戳 */
+let lastActionAt = 0;
+/** 该交互对应的 action 节点 */
+let lastActionNode = null;
+/** 该交互是否已被某次请求「消费」（一次点击只归属一个请求） */
+let lastActionUsed = false;
+/** 当前所在页面节点，作为自动请求的 parent */
+let currentPageNode = null;
 let enabled = true;
 let queue = [];
 let timer = null;
@@ -261,6 +277,10 @@ function pageView(to) {
     occurredAt: Date.now(),
   });
   lastNode = { kind: 'PAGE', value: path };
+  currentPageNode = { kind: 'PAGE', value: path };
+  // ★ 导航已消费掉之前那次点击：新页面挂载时发的请求属于「页面自动干的」，
+  //   不能归给“点了一下详情”那个 action（否则图上看不出来是自动拉的）
+  lastActionUsed = true;
   scheduleFlush();
 }
 
@@ -282,6 +302,11 @@ function hookClicks() {
         currentStep = stepNo;
         // ★ 每次点击新开 trace：点击触发的请求会复用这一个
         currentTrace = newTraceId();
+
+        // ★ 开启意图窗口：紧随其后的请求算「人干的」
+        lastActionAt = Date.now();
+        lastActionNode = { kind: 'ACTION', value: sel };
+        lastActionUsed = false;
 
         push({
           type: 'CLICK',
@@ -362,6 +387,16 @@ function hookFetch() {
 function reportApi({ path, method, res, startedAt, traceId, error }) {
   const durationMs = Date.now() - startedAt;
   const ok = res && res.ok;
+
+  // ★ 「人干的」还是「页面自动干的」：
+  //   人为 = 最近 intentWindowMs 内有过用户交互，且该交互还没被别的请求消费
+  //   自动 = 其余全部（组件 onMounted 拉数据、轮询、预加载）
+  //   两类在图上是不同的边（TRIGGER vs AUTO），不区分就等于让模型学噪声
+  const byHuman =
+    !!lastActionNode && !lastActionUsed && Date.now() - lastActionAt <= CFG.intentWindowMs;
+  if (byHuman) lastActionUsed = true;
+  const parent = byHuman ? lastActionNode : currentPageNode;
+
   push({
     type: 'API',
     path,
@@ -373,7 +408,10 @@ function reportApi({ path, method, res, startedAt, traceId, error }) {
     durationMs,
     status: ok ? 'OK' : 'ERROR',
     errorMsg: error ? String(error) : res && !res.ok ? `HTTP ${res.status}` : null,
-    raw: { httpStatus: res ? res.status : null },
+    raw: { httpStatus: res ? res.status : null, byHuman: byHuman },
+    // 显式给出 parent：parentKind 为 null 表示“无人为归属”
+    parentKind: parent ? parent.kind : null,
+    parentValue: parent ? parent.value : null,
   });
   scheduleFlush();
 }

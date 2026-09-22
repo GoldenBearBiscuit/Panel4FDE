@@ -110,19 +110,12 @@ public class ObserveReportController {
             nodeKey = NodeKeys.action(fe.selector);
         }
 
-        // ★ parent 由 kinds + 原始值 在服务端归一化 → 与后端生成的值必然一致
+        // ★ parent 由 kind + 原始值 在服务端归一化 → 与后端生成的值必然一致
         String parentKey = NodeKeys.of(fe.parentKind, fe.parentValue);
-        EdgeType edgeType = null;
-        if (parentKey != null && !parentKey.equals(nodeKey)) {
-            if (type == EventType.API) {
-                edgeType = EdgeType.TRIGGER;
-            } else if (type == EventType.PAGE_VIEW) {
-                edgeType = EdgeType.NAVIGATE;
-            } else {
-                edgeType = EdgeType.PRECEDES;
-            }
-        } else {
+        EdgeType edgeType = deriveEdge(type, parentKey);
+        if (parentKey != null && parentKey.equals(nodeKey)) {
             parentKey = null;
+            edgeType = null;
         }
 
         Date occurred = fe.occurredAt == null ? new Date() : new Date(fe.occurredAt);
@@ -147,6 +140,38 @@ public class ObserveReportController {
                 .appName(appName)
                 .rawPayload(buildRaw(fe))
                 .build();
+    }
+
+    /**
+     * ★ 边语义完全由「子事件类型 + parent 节点类型」推导，不需要新增字段。
+     *
+     * <pre>
+     *  PAGE_VIEW ← page    → NAVIGATE   页面跳转
+     *  PAGE_VIEW ← action  → TRIGGER    人点了 link/按钮导致的跳转
+     *  API       ← action  → TRIGGER    ★「人干的」
+     *  API       ← page    → AUTO       ★「页面自动干的」（挂载拉数据、轮询、预加载）
+     *  其余                → PRECEDES   时序兜底
+     * </pre>
+     */
+    static EdgeType deriveEdge(EventType type, String parentKey) {
+        if (parentKey == null) {
+            return null;
+        }
+        boolean fromAction = parentKey.startsWith("action:");
+        boolean fromPage = parentKey.startsWith("page:");
+        if (type == EventType.PAGE_VIEW) {
+            if (fromPage) {
+                return EdgeType.NAVIGATE;
+            }
+            return fromAction ? EdgeType.TRIGGER : EdgeType.PRECEDES;
+        }
+        if (type == EventType.API) {
+            if (fromAction) {
+                return EdgeType.TRIGGER;
+            }
+            return fromPage ? EdgeType.AUTO : EdgeType.PRECEDES;
+        }
+        return EdgeType.PRECEDES;
     }
 
     private String buildRaw(FrontendEventDto fe) {

@@ -93,23 +93,54 @@ API 事件在响应返回时才落库（`occurred_at` 记的仍是请求开始�
 ### 图长什么样
 
 ```
-蓝圆 = 前端（页面 / 点击）      黄方 = 后端（接口）      绿菱 = 资源层（SQL / Redis）
-
-订单列表 ──TRIGGER──► GET /api/order/list
-                          ├──CALL──► GET order:list:page:*
-                          ├──CALL──► SELECT demo_order
-                          └──CALL──► SETEX order:list:page:*
-       └─PRECEDES─► 详情(点击) ──NAVIGATE──► 订单详情 ──► … ──► 保存
-                                                                  └──TRIGGER──► POST /api/order/{id}/save
-                                                                                    ├─CALL─► UPDATE demo_order
-                                                                                    └─CALL─► DEL / SETEX …
+颜色 = 层                                     线型 = 边的语义
+蓝 = 前端（页面 / 点击）                    深色实线 = 人为（TRIGGER / NAVIGATE）
+黄 = 后端（接口）                            浅灰实线 = 页面自动（AUTO）
+绿 = 资源层（SQL / Redis）                   绿灰实线 = 资源调用（CALL）
+                                              极浅虚线 = 时序兜底（PRECEDES）
 ```
 
-- 实线 = 有语义的边（TRIGGER / CALL / NAVIGATE）
-- 虚线 = PRECEDES（时序兜底，只表示“先后”）
-- 图很长是正常的：**一条操作路线本来就是一条时间线**，纵向滚动着看
+### ★ 人和自动是分开的（这是你问过的问题）
 
-页面上的图可以拖拽平移、滚轮缩放；点「适应画布」可一屏看全（会被缩小）。
+页面一加载就会有请求（组件 `onMounted` 拉数据），这是真实发生的事情，**确实应该被记录**。
+但如果不区分“人点的”和“页面自动发的”，后面的模型就会把噪声当人的行为学。所以：
+
+| 边 | 含义 | 从 → 到 |
+|---|---|---|
+| `TRIGGER` | **人**的操作引发 | `action:` → `api:` / `action:` → `page:` |
+| `AUTO` | **页面自动**引发（挂载拉数据、轮询、预加载） | `page:` → `api:` |
+| `NAVIGATE` | 页面跳转 | `page:` → `page:` |
+| `CALL` | 调用资源 | `api:` → `sql:` / `redis:` |
+| `PRECEDES` | 时序兜底（只表示“先后”） | 任意相邻 |
+
+判定机制：**意图窗口**。只有「最近 1.2 秒内有过用户交互、且这次交互还没被别的请求消费」
+的请求才算人为；页面挂载时的请求不算（导航会把那次点击标记为已消费）。
+
+实测效果（验收脚本客观断言）：
+
+```
+action:#btn-save  --TRIGGER-->  api:/api/order/{id}/save     ✅ 人点的「保存」
+page:/order/list  --AUTO----->  api:/api/order/list          ✅ 页面自己拉的列表
+```
+
+**控制条上的「只看人为」**勾上后，滤掉 `AUTO` 与 `PRECEDES` 边及相关节点，
+只留下人的操作路线（实测 19节点/28边 → 16节点/12边）。
+
+### 完整路线长这样
+
+```
+订单列表 ──AUTO──► GET /api/order/list          ← 页面挂载自动拉的
+                      ├──CALL──► GET order:list:page:*
+                      ├──CALL──► SELECT demo_order
+                      └──CALL──► SETEX order:list:page:*
+       └─PRECEDES─► 详情(点击) ──TRIGGER──► 订单详情 ──► … ──► 保存(点击)
+                                                                   └──TRIGGER──► POST /api/order/{id}/save
+                                                                                     ├─CALL─► UPDATE demo_order
+                                                                                     └─CALL─► DEL / SETEX …
+```
+
+图很长是正常的：**一条操作路线本来就是一条时间线**，纵向滚动着看。
+宽图（如「只看人为」）则横向滚动；点「适应画布」可一屏看全（会被缩小）。
 
 ### 其它接口
 

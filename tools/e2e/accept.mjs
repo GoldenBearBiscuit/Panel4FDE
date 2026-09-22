@@ -176,8 +176,29 @@ try {
   );
 
   const edgeTypes = [...new Set(g.edges.map((e) => e.type))];
-  check('TRIGGER 边存在（前端行为 → 接口）', edgeTypes.includes('TRIGGER'), edgeTypes.join(','));
+  check('TRIGGER 边存在（人的操作 → 接口/页面）', edgeTypes.includes('TRIGGER'), edgeTypes.join(','));
+  check('★ AUTO 边存在（页面自动发的请求，与人触发的严格区分）', edgeTypes.includes('AUTO'), edgeTypes.join(','));
   check('CALL 边存在（接口 → 资源层）', edgeTypes.includes('CALL'), edgeTypes.join(','));
+
+  // ★★ 边界语义正确性：TRIGGER 必须从 action 出发，AUTO 必须从 page 出发
+  const humanApi = g.edges.filter((e) => e.type === 'TRIGGER' && e.target.startsWith('api:'));
+  const autoApi = g.edges.filter((e) => e.type === 'AUTO' && e.target.startsWith('api:'));
+  check('★ 人为触发的接口边起点是 action:', humanApi.length > 0 && humanApi.every((e) => e.source.startsWith('action:')),
+    `${humanApi.length} 条，起点: ${[...new Set(humanApi.map((e) => e.source.split(':')[0]))].join(',')}`);
+  check('★ 自动触发的接口边起点是 page:', autoApi.length > 0 && autoApi.every((e) => e.source.startsWith('page:')),
+    `${autoApi.length} 条，起点: ${[...new Set(autoApi.map((e) => e.source.split(':')[0]))].join(',')}`);
+
+  // ★★ 最强的一条：点「保存」触发的接口，必须归属到 action，而不是页面自动
+  const saveEdge = g.edges.find((e) => e.target === 'api:/api/order/{id}/save');
+  check('★ 「保存」接口归属人为点击（非页面自动）',
+    !!saveEdge && saveEdge.type === 'TRIGGER' && saveEdge.source.startsWith('action:'),
+    saveEdge ? `${saveEdge.source} --${saveEdge.type}--> ${saveEdge.target}` : '未找到该接口的入边');
+
+  // 页面挂载拉列表 → 应是 AUTO（页面自动），不是人点的
+  const listEdge = g.edges.find((e) => e.target === 'api:/api/order/list');
+  check('★ 列表接口归属页面自动加载（非人为）',
+    !!listEdge && listEdge.type === 'AUTO' && listEdge.source.startsWith('page:'),
+    listEdge ? `${listEdge.source} --${listEdge.type}--> ${listEdge.target}` : '未找到该接口的入边');
 
   // 资源层事件必须挂在 API 节点下（parent 是 api:）
   const callEdges = g.edges.filter((e) => e.type === 'CALL');
@@ -189,6 +210,22 @@ try {
   check('无 JS 异常（pageerror）', jsErrors.length === 0, jsErrors.slice(0, 3).join(' | ') || '无');
   check('无 console 错误', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | ') || '无');
   check('无 HTTP 4xx/5xx', httpErrors.length === 0, httpErrors.slice(0, 3).join(' | ') || '无');
+
+  // ★「只看人为」过滤：勾上后节点/边应变少，且不应出现 AUTO/PRECEDES
+  console.log('\n[5b/5] 「只看人为」过滤');
+  await page.click('#btn-current');
+  await sleep(2000);
+  const allInfo = await page.evaluate(() => window.__graphInfo);
+  await page.click('#chk-human');
+  await sleep(1200);
+  const humanInfo = await page.evaluate(() => window.__graphInfo);
+  console.log('  只看人为时:', JSON.stringify(humanInfo));
+  check('★ 只看人为：节点/边被正确过滤',
+    humanInfo && humanInfo.nodes > 0 && humanInfo.nodes <= allInfo.nodes && humanInfo.edges < allInfo.edges,
+    `全部 ${allInfo && allInfo.nodes}节点/${allInfo && allInfo.edges}边 → 只看人为 ${humanInfo && humanInfo.nodes}节点/${humanInfo && humanInfo.edges}边`);
+  await page.screenshot({ path: path.join(OUT, '06-human-only.png') });
+  await page.click('#chk-human');
+  await sleep(600);
 } catch (e) {
   check('执行过程未抛异常', false, e.message);
   await page.screenshot({ path: path.join(OUT, '99-failure.png') }).catch(() => {});
